@@ -3,6 +3,7 @@ from cirq import devices, Circuit
 from cirq.devices import GridQubit
 from cirq.google.line.placement.sequence import GridQubitLineTuple
 from ClosestSearchStrategy import ClosestSequenceSearchStrategy, NotFoundError
+from cirq.google.engine.calibration import Calibration
 from functools import reduce
 
 from typing import Union, Sequence, Iterable, Callable, Optional, List
@@ -10,7 +11,7 @@ from numbers import Number
 
 # import qsimcirq
 
-def _get_curve() -> dict:
+def get_curve() -> dict:
     hard_coded_rule = [1,2,-1,2,2,1,-2,1,2,1,-2,-2,-1,-2,1]
     steps = {1:(0,1),2:(-1,0),-1:(0,-1),-2:(1,0)}
     trace = {}
@@ -19,6 +20,34 @@ def _get_curve() -> dict:
         trace[start] = start + steps[r]
         start = trace[start]
     return trace
+
+def get_calibration_metrics(threshold):
+    # from https://quantumai.google/cirq/google/calibration#retrieving_calibration_metrics
+
+    # an Engince object to use
+    engine = cirq.google.Engine(project_id=YOUR_PROJECT_ID)
+    processor = engine.get_processor(processor_id=PROCESSOR_ID)
+
+    latest_calibration = processor.get_current_calibration()
+
+    err_qubits = []
+    for metric_name in latest_calibration:
+        for qubit_or_pair in latest_calibration[metric_name]:
+            metric_value = latest_calibration[metric_name][qubit_or_pair]
+            # find the qubits that are below threshold
+            if metric_value < threshold:
+                # get a qubit from a metric key
+                try:
+                    q = key_to_qubit(qubit_or_pair)
+                    err_qubits.append(q)
+                except ValueError:
+                    try:
+                        key = str_to_key(qubit_or_pair)
+                        q = key_to_qubit(qubit_or_pair)
+                        err_qubits.append(q)
+                    except ValueError:
+                        continue
+    return err_qubits
 
 def mult_qubit_opcount_cost(circuit:'cirq.Circuit'): 
     """ Returns tuple of the number of operations applied to more than one qubit, and the total number of operations """
@@ -36,7 +65,7 @@ def naive_line_mapping(circuit: 'cirq.Circuit',
 
     width = len(circuit.all_qubits())
 
-    level_2_curve = _get_curve()
+    level_2_curve = get_curve()
 
     if exclude: 
         # Absolutely revolting hack to search over a subset of the device's qubits
