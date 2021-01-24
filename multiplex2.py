@@ -12,6 +12,11 @@ from numbers import Number
 # import qsimcirq
 
 def get_curve() -> dict:
+    """Looks for a hilbert curve sequence starting at a given qubit.
+    Returns:
+        The dictonary of qubits that map to each other along the curve found by this method, 
+        which is similar to a LinkedList of qubits.
+    """
     hard_coded_rule = [1,2,-1,2,2,1,-2,1,2,1,-2,-2,-1,-2,1]
     steps = {1:(0,1),2:(-1,0),-1:(0,-1),-2:(1,0)}
     trace = {}
@@ -75,7 +80,7 @@ def naive_line_mapping(circuit: 'cirq.Circuit',
         device.qubits = [q for q in device.qubits if q not in exclude]
     
     try:
-        line = cirq.google.line_on_device(device, length=width, method=ClosestSequenceSearchStrategy(start))
+        line = cirq.google.line_on_device(device, length=width, method=ClosestSequenceSearchStrategy(start,level_2_curve))
         print(line)
         # print()
     except cirq.google.line.placement.sequence.NotFoundError as e:
@@ -169,7 +174,6 @@ if __name__ == '__main__':
         circuit.append(cirq.H(cirq.LineQubit(i)) for i in range(n))
         circuit.append(cirq.CX(cirq.LineQubit(0),cirq.LineQubit(1)))
         circuit.append(cirq.measure(*cirq.LineQubit.range(n), key='all'))
-        #circuit.append(cirq.measure(*cirq.LineQubit.range(n)))
         return circuit
 
     # Initialize Simulator
