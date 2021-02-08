@@ -36,7 +36,7 @@ def get_error_qubits(threshold):
     # latest_calibration = processor.get_current_calibration()
 
     # open corresponding pickle file
-    f = open("filename.pickle","rb")
+    f = open("latest_calibration.pickle","rb")
     latest_calibration = pickle.load(f)
     f.close()
 
@@ -44,7 +44,7 @@ def get_error_qubits(threshold):
     for metric_name in latest_calibration:
         for qubit_or_pair in latest_calibration[metric_name]:
             metric_value = latest_calibration[metric_name][qubit_or_pair]
-            # find the qubits that are below threshold
+            # find the qubits that have higher error probability(above the threshold)
             if metric_value[0] > threshold:
                 # get the first qubit of the tuple from a metric key
                 err_qubits.append(qubit_or_pair[0])
