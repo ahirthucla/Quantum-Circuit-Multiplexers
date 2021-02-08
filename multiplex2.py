@@ -1,13 +1,13 @@
 import cirq
 from cirq import devices, Circuit
-from cirq.devices import GridQubit
+from cirq.devices.grid_qubit import GridQubit
 from cirq.google.line.placement.sequence import GridQubitLineTuple
 from ClosestSearchStrategy import ClosestSequenceSearchStrategy, NotFoundError
-from cirq.google.engine.calibration import Calibration
 from functools import reduce
 
 from typing import Union, Sequence, Iterable, Callable, Optional, List
 from numbers import Number
+import pickle
 
 # import qsimcirq
 
@@ -26,32 +26,28 @@ def get_curve() -> dict:
         start = trace[start]
     return trace
 
-def get_calibration_metrics(threshold):
+def get_error_qubits(threshold):
     # from https://quantumai.google/cirq/google/calibration#retrieving_calibration_metrics
 
     # an Engince object to use
-    engine = cirq.google.Engine(project_id=YOUR_PROJECT_ID)
-    processor = engine.get_processor(processor_id=PROCESSOR_ID)
+    # engine = cirq.google.Engine(project_id=YOUR_PROJECT_ID)
+    # processor = engine.get_processor(processor_id=PROCESSOR_ID)
 
-    latest_calibration = processor.get_current_calibration()
+    # latest_calibration = processor.get_current_calibration()
+
+    # open corresponding pickle file
+    f = open("filename.pickle","rb")
+    latest_calibration = pickle.load(f)
+    f.close()
 
     err_qubits = []
     for metric_name in latest_calibration:
         for qubit_or_pair in latest_calibration[metric_name]:
             metric_value = latest_calibration[metric_name][qubit_or_pair]
             # find the qubits that are below threshold
-            if metric_value < threshold:
-                # get a qubit from a metric key
-                try:
-                    q = key_to_qubit(qubit_or_pair)
-                    err_qubits.append(q)
-                except ValueError:
-                    try:
-                        key = str_to_key(qubit_or_pair)
-                        q = key_to_qubit(qubit_or_pair)
-                        err_qubits.append(q)
-                    except ValueError:
-                        continue
+            if metric_value[0] > threshold:
+                # get the first qubit of the tuple from a metric key
+                err_qubits.append(qubit_or_pair[0])
     return err_qubits
 
 def mult_qubit_opcount_cost(circuit:'cirq.Circuit'): 
@@ -62,8 +58,7 @@ def mult_qubit_opcount_cost(circuit:'cirq.Circuit'):
 
 def naive_line_mapping(circuit: 'cirq.Circuit', 
                         device: 'cirq.google.XmonDevice', 
-                        start : GridQubit,
-                        exclude: Optional[Iterable[devices.LineQubit]] = None):
+                        start : GridQubit):
     """ Wraps cirq.google.line_on_device to support excluding a set of qubits from the search. 
      Returns cirq.devices.LineQubit -> cirq.devices.GridQubit mapping function
     """
@@ -71,26 +66,17 @@ def naive_line_mapping(circuit: 'cirq.Circuit',
     width = len(circuit.all_qubits())
 
     level_2_curve = get_curve()
-
-    if exclude: 
-        # Absolutely revolting hack to search over a subset of the device's qubits
-        # Ideally exclude will be an argument to the search function (in this case line_on_device)
-        restore = device.qubits
-        # device.qubits = device.qubits.difference(exclude)
-        device.qubits = [q for q in device.qubits if q not in exclude]
     
     try:
-        line = cirq.google.line_on_device(device, length=width, method=ClosestSequenceSearchStrategy(start,level_2_curve))
+        err_qubits = get_error_qubits(25)
+        print(err_qubits)
+        line = cirq.google.line_on_device(device, length=width, 
+            method=ClosestSequenceSearchStrategy(start, level_2_curve, err_qubits))
         print(line)
         # print()
     except cirq.google.line.placement.sequence.NotFoundError as e:
-        if exclude: device.qubits = restore
-        raise e
+        raise NotFoundError('No line placment found.')
         # should have generic sequence not found exception here (not line specific)
-    
-    if exclude: 
-        # Fix the device and hope nothing is broken :)
-        device.qubits = restore
 
     return lambda q: line[q.x], level_2_curve[line[-1]]
 
@@ -104,13 +90,11 @@ def multiplex_onto_xmon(circuits:Iterable['cirq.Circuit'],
     # Order circuits by a cost function
     circuits = list(enumerate(sorted(circuits, key=cost_fun, reverse=True)))
 
-    start = GridQubit(5,3)
-
     while circuits: 
+        start = GridQubit(5,3)
         # Start a new running circuit
         circuit_id, circuit = circuits.pop(0)
         qubit_map, start = mapping_function(circuit, device, start)
-        exclude = {qubit_map(qubit) for qubit in circuit.all_qubits()}
 
         circuit = cirq.google.optimized_for_sycamore(circuit=circuit, new_device=device, qubit_map=qubit_map)
 
@@ -122,15 +106,13 @@ def multiplex_onto_xmon(circuits:Iterable['cirq.Circuit'],
         for index, (circuit_id, circuit) in enumerate(circuits):
             # Try to find a place on the remaining qubits of the device to place additional circuit
             try: 
-                qubit_map, start = mapping_function(circuit, device, start, exclude=exclude)
+                qubit_map, start = mapping_function(circuit, device, start)
             # except cirq.google.line.placement.sequence.NotFoundError:
             except NotFoundError:
                 remaining_circuits.append((circuit_id, circuit))
                 continue
 
             new_qubits = {qubit_map(qubit) for qubit in circuit.all_qubits()}
-            assert exclude.isdisjoint(new_qubits), "mapping function does not properly exclude qubits"
-            exclude |= new_qubits
 
             # Place the additional circuit on found qubits
             circuit = cirq.google.optimized_for_sycamore(circuit=circuit, new_device=device, qubit_map=qubit_map)
@@ -140,8 +122,6 @@ def multiplex_onto_xmon(circuits:Iterable['cirq.Circuit'],
             # Add to the running circuit
             new_circuit = new_circuit + circuit
 
-            assert new_circuit.all_qubits() == exclude, "new circuit does not have expected qubits"
-
         circuits = remaining_circuits
 
 
@@ -149,10 +129,12 @@ def multiplex_onto_xmon(circuits:Iterable['cirq.Circuit'],
         device.validate_circuit(new_circuit)
         yield new_circuit
 
+# =========================================== For Testing ===================================================================
+
 if __name__ == '__main__': 
     # super simple testing of multiple copies of the same circuit
     def gen():
-        n = 10
+        n = 6
         depth = 2
         circuit = cirq.Circuit(
             cirq.CZ(cirq.LineQubit(j), cirq.LineQubit(j + 1))
@@ -179,7 +161,7 @@ if __name__ == '__main__':
     # Initialize Simulator
     s = cirq.Simulator()
 
-    cs = [gen2() for _ in range(2)]
+    cs = [gen2(),gen()]
     print(cs[0])
     res = multiplex_onto_xmon(cs, cirq.google.Sycamore)
     print(cirq.google.Sycamore)

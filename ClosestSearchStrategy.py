@@ -34,17 +34,17 @@ class ClosestSequenceSearch:
         self._start = start
         self._sequence = None  # type: Optional[List[GridQubit]]
 
-    def get_or_search(self, curve: dict) -> List[GridQubit]:
+    def get_or_search(self, curve: dict, err_qubits:List[GridQubit]) -> List[GridQubit]:
         """Starts the search or gives previously calculated sequence.
         Returns:
             The linear qubit sequence found.
         """
         if not self._sequence:
-            self._sequence = self._find_sequence(curve)
+            self._sequence = self._find_sequence(curve, err_qubits)
         return self._sequence
 
     @abc.abstractmethod
-    def _choose_next_qubit(self, qubit: GridQubit, curve: dict) -> Optional[GridQubit]:
+    def _choose_next_qubit(self, qubit: GridQubit, curve: dict, err_qubits:List[GridQubit]) -> Optional[GridQubit]:
         """Selects next qubit on the linear sequence.
         Args:
             qubit: Last qubit which is already present on the linear sequence
@@ -57,15 +57,15 @@ class ClosestSequenceSearch:
             more qubits are available and search should stop.
         """
 
-    def _find_sequence(self, curve: dict) -> List[GridQubit]:
+    def _find_sequence(self, curve: dict, err_qubits:List[GridQubit]) -> List[GridQubit]:
         """Looks for a sequence starting at a given qubit.
         Returns:
             The sequence found by this method.
         """
 
-        return self._sequence_search(self._start, curve)
+        return self._sequence_search(self._start, curve, err_qubits)
 
-    def _sequence_search(self, start: GridQubit, curve: dict) -> List[GridQubit]:
+    def _sequence_search(self, start: GridQubit, curve: dict, err_qubits:List[GridQubit]) -> List[GridQubit]:
         """Search for the continuous linear sequence from the given qubit.
         Args:
             start: The first qubit, where search should be triggered from.
@@ -78,7 +78,10 @@ class ClosestSequenceSearch:
         n = start  # type: Optional[GridQubit]
         while n is not None:
             # Append qubit n to the sequence
-            seq.append(n)
+            if n not in err_qubits:
+                seq.append(n)
+            else:
+                seq.clear()
             # Advance search to the next qubit.
             n = self._choose_next_qubit(n, curve)
         return seq
@@ -88,20 +91,20 @@ class _PickClosestNeighbors(ClosestSequenceSearch):
     """Pick Next Qubit along the hilbert curve"""
 
     def _choose_next_qubit(self, qubit: GridQubit, curve: dict) -> Optional[GridQubit]:
-
         return curve.get(qubit)
 
 
 class ClosestSequenceSearchStrategy(place_strategy.LinePlacementStrategy):
     """closest search method for linear sequence of qubits on a chip."""
 
-    def __init__(self, start: GridQubit, curve: dict) -> None:
+    def __init__(self, start: GridQubit, curve: dict, err_qubits:List[GridQubit]) -> None:
         """Initializes closest sequence search strategy.
         Args:
             start: GridQubit to start
         """
         self.start = start
         self.curve = curve
+        self.err_qubits = err_qubits
 
     def place_line(self, device: 'cirq.google.XmonDevice', length: int) -> GridQubitLineTuple:
         """Runs line sequence search.
@@ -122,7 +125,7 @@ class ClosestSequenceSearchStrategy(place_strategy.LinePlacementStrategy):
 
         sequence = []  # type: LineSequence
 
-        sequence.append(_PickClosestNeighbors(device, self.start).get_or_search(self.curve))
+        sequence.append(_PickClosestNeighbors(device, self.start).get_or_search(self.curve, self.err_qubits))
 
         # return GridQubitLineTuple.best_of(sequence[:length]), sequence[length] if length < len(sequence) else None
         return GridQubitLineTuple.best_of(sequence[:length], length)
