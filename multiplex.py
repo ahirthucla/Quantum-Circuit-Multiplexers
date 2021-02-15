@@ -58,7 +58,7 @@ def mult_qubit_opcount_cost(circuit:'cirq.Circuit'):
     cnot_count, all_count = reduce(lambda xy,op:(xy[0] + (len(op.qubits) > 1), xy[1] + 1), circuit.all_operations(), (0,0))
     return cnot_count, all_count
 
-def device_connectivity(device:'cirq.Device') -> nx.Graph:
+def device_connectivity(device:'cirq.Device', limit: Set['cirq.Qid']) -> nx.Graph:
     # Below is how it seems we "should" extract device connectivity based on the functionality available to the device class
 
     #pairs = {}
@@ -83,7 +83,7 @@ def device_connectivity(device:'cirq.Device') -> nx.Graph:
                 for gate_defs in cirq.google.Sycamore.gate_definitions.values()
                 for gate_def in gate_defs if gate_def.number_of_qubits == 2
     #            for pair in gate_def.target_set if len(pair) == 2
-                for pair in gate_def.target_set if len(pair) == 2 and set(pair).issubset(device.qubit_set())
+                for pair in gate_def.target_set if len(pair) == 2 and set(pair).issubset(device.qubit_set()) and set(pair).issubset(limit)
             }
     return nx.Graph(pairs)
 
@@ -152,7 +152,6 @@ def multiplex_onto_sycamore(circuits:Iterable['cirq.Circuit'],
     context = None
 
     for index, circuit in enumerate(circuits):
-        print(context)
         # generate a qubit map according to the mapping_function
         try:
             qubit_map, context = mapping_function(circuit, device, exclude, context)
@@ -193,7 +192,7 @@ def multiplex_onto_sycamore(circuits:Iterable['cirq.Circuit'],
         assert set(qubit_map.keys()) == set(circuit.all_qubits())
 
         # apply swaps while remapping circuit
-        graph = device_connectivity(device)
+        graph = device_connectivity(device, limit=qubit_map.values())
         reverse_map = {p:l for l,p in qubit_map.items()}
         pre = len(list(circuit.all_operations()))
         pre_time = time.process_time()
