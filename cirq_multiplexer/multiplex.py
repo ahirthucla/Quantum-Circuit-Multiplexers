@@ -1,5 +1,5 @@
 import cirq
-from ClosestSearchStrategy import ClosestSequenceSearchStrategy, NotFoundError
+from cirq_multiplexer.ClosestSearchStrategy import ClosestSequenceSearchStrategy, NotFoundError
 from functools import reduce
 import networkx as nx
 import time
