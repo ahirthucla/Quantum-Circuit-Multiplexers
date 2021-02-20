@@ -1,17 +1,15 @@
 import cirq
-from cirq import devices, Circuit
-from cirq.devices.grid_qubit import GridQubit
-from cirq.google.line.placement.sequence import GridQubitLineTuple
 from ClosestSearchStrategy import ClosestSequenceSearchStrategy, NotFoundError
 from functools import reduce
-import cirq.contrib.routing as ccr
 import networkx as nx
 import time
+import sys
+from cirq.contrib.routing import route_circuit
 
 from typing import Union, Sequence, Iterable, Callable, Optional, List, Set
 from numbers import Number
-import pickle
 
+DEBUG = False
 
 def get_curve() -> dict:
     """Looks for a hilbert curve sequence starting at a given qubit.
@@ -22,25 +20,18 @@ def get_curve() -> dict:
     hard_coded_rule = [1,2,-1,2,2,1,-2,1,2,1,-2,-2,-1,-2,1]
     steps = {1:(0,1),2:(-1,0),-1:(0,-1),-2:(1,0)}
     trace = {}
-    start = GridQubit(5,3) #hardcoded for now
+    start = cirq.GridQubit(5,3) #hardcoded for now
     for r in hard_coded_rule:
         trace[start] = start + steps[r]
         start = trace[start]
     return trace
 
-def get_error_qubits(threshold):
-    # from https://quantumai.google/cirq/google/calibration#retrieving_calibration_metrics
+def get_error_qubits(project_id, processor_id, threshold):
 
-    # an Engince object to use
-    # engine = cirq.google.Engine(project_id=YOUR_PROJECT_ID)
-    # processor = engine.get_processor(processor_id=PROCESSOR_ID)
-
-    # latest_calibration = processor.get_current_calibration()
-
-    # open corresponding pickle file
-    f = open("latest_calibration.pickle","rb")
-    latest_calibration = pickle.load(f)
-    f.close()
+    # query for the latest calibration
+    engine = cirq.google.Engine(project_id=project_id)
+    processor = engine.get_processor(processor_id=processor_id)
+    latest_calibration = processor.get_current_calibration()
 
     err_qubits = []
     for metric_name in latest_calibration:
@@ -54,7 +45,6 @@ def get_error_qubits(threshold):
 
 def mult_qubit_opcount_cost(circuit:'cirq.Circuit'): 
     """ Returns tuple of the number of operations applied to more than one qubit, and the total number of operations """
-
     cnot_count, all_count = reduce(lambda xy,op:(xy[0] + (len(op.qubits) > 1), xy[1] + 1), circuit.all_operations(), (0,0))
     return cnot_count, all_count
 
@@ -99,7 +89,7 @@ def naive_line_mapping(circuit: 'cirq.Circuit',
         exclude = set()
 
     if context == None:
-        context = GridQubit(5,3)
+        context = cirq.GridQubit(5,3)
 
     width = len(circuit.all_qubits())
 
@@ -110,7 +100,6 @@ def naive_line_mapping(circuit: 'cirq.Circuit',
     try:
         line = cirq.google.line_on_device(device, length=width, 
             method=method)
-        print(line)
     except cirq.google.line.placement.sequence.NotFoundError as e:
         raise NotFoundError('No line placment found.')
 
@@ -142,7 +131,7 @@ def multiplex_onto_sycamore(circuits:Iterable['cirq.Circuit'],
     exclude = set(exclude_always)
 
     # empty circuit to build upon 
-    cumulative_circuit = Circuit()
+    cumulative_circuit = cirq.Circuit()
 
     # indices for circuits included in cumulative one
     circuits_included = set()
@@ -163,63 +152,70 @@ def multiplex_onto_sycamore(circuits:Iterable['cirq.Circuit'],
 
             # yield old cumulative circuit and start a new one
             yield cumulative_circuit, circuits_included
-            cumulative_circuit = Circuit()
+            cumulative_circuit = cirq.Circuit()
             circuits_included = set()
 
 
         # update measurement keys with the circuit index
-        measurement_key_map = {key:str(index)+"_"+key for key in circuit.all_measurement_keys()}
-        pre = len(list(circuit.all_operations()))
-        pre_time = time.process_time()
+        measurement_key_map = {key:str(index)+"."+key for key in circuit.all_measurement_keys()}
+        if DEBUG:
+            print('measurement_key_map:',measurement_key_map)
+            pre = len(list(circuit.all_operations()))
+            pre_time = time.process_time()
         circuit = cirq.with_measurement_key_mapping(circuit, measurement_key_map)
-        print("measurement_1: ", len(list(circuit.all_operations())) - pre, time.process_time()-pre_time)
+        if DEBUG:
+            print("measurement_1: ", len(list(circuit.all_operations())) - pre, time.process_time()-pre_time)
 
-        # split multiple qubit measurement operations into multiple, single qubit measurement operations
-        def split_measure(measure_gate:'cirq.GateOperation') -> 'cirq.GateOperation':
-            if not cirq.protocols.is_measurement(measure_gate):
-                yield measure_gate
-                return
-            key = cirq.protocols.measurement_key(measure_gate)
-            for ind, qubit in enumerate(measure_gate.qubits):
-                yield cirq.measure(qubit, key=key + '_' + str(ind))
+        try:
+            # compile and map circuit according to qubit_map
+            if DEBUG:
+                pre = len(list(circuit.all_operations()))
+                pre_time = time.process_time()
+            circuit = cirq.google.optimized_for_sycamore(circuit=circuit, new_device=device, optimizer_type='sycamore')
+            if DEBUG:
+                print("optimize: ", len(list(circuit.all_operations())) - pre, time.process_time()-pre_time)
+        except ValueError as e:
 
-        pre = len(list(circuit.all_operations()))
-        pre_time = time.process_time()
-        circuit = Circuit(*map(split_measure, circuit.all_operations()))
-        print("measurement_2: ", len(list(circuit.all_operations())) - pre, time.process_time()-pre_time)
+            # split multiple qubit measurement operations into multiple, single qubit measurement operations
+            # a workaround to use ccr
+            def split_measure(measure_gate:'cirq.GateOperation') -> 'cirq.GateOperation':
+                if not cirq.protocols.is_measurement(measure_gate):
+                    yield measure_gate
+                    return
+                key = cirq.protocols.measurement_key(measure_gate)
+                for qubit in measure_gate.qubits:
+                    yield cirq.measure(qubit, key=key + '.' + str(qubit))
 
-        # test
-        assert set(qubit_map.keys()) == set(circuit.all_qubits())
+            if DEBUG:
+                pre = len(list(circuit.all_operations()))
+                pre_time = time.process_time()
+                print('all_measurement_keys', circuit.all_measurement_keys())
+            circuit = cirq.Circuit(*map(split_measure, circuit.all_operations()))
+            if DEBUG:
+                print('all_measurement_keys2', circuit.all_measurement_keys())
+                print("measurement_2: ", len(list(circuit.all_operations())) - pre, time.process_time()-pre_time)
 
-        # apply swaps while remapping circuit
-        graph = device_connectivity(device, limit=qubit_map.values())
-        reverse_map = {p:l for l,p in qubit_map.items()}
-        pre = len(list(circuit.all_operations()))
-        pre_time = time.process_time()
-        swap_network = ccr.route_circuit(circuit=circuit, device_graph=graph, algo_name='greedy', initial_mapping=reverse_map)
-        circuit = swap_network.circuit
-        print("route_and_map: ", len(list(circuit.all_operations())) - pre, time.process_time()-pre_time)
-        
-        # test
-        print(circuit.all_qubits())
-        print(qubit_map)
-        print(swap_network.initial_mapping)
-        assert set(circuit.all_qubits()).issubset(graph.nodes)
-        assert set(swap_network.initial_mapping.values()) == set(qubit_map.keys()), (list(sorted(swap_network.initial_mapping.values())), list(sorted(qubit_map.keys())))
-        assert set(swap_network.initial_mapping.keys()) == set(qubit_map.values()), (list(sorted(swap_network.initial_mapping.keys())), list(sorted(qubit_map.values())))
-        assert set(swap_network.initial_mapping.keys()) == set(circuit.all_qubits()), set(circuit.all_qubits()).difference(set(qubit_map.values()))
-        assert set(swap_network.initial_mapping.keys()) == set(circuit.all_qubits()), set(circuit.all_qubits()).difference(set(swap_network.initial_mapping.keys()))
-        assert set(qubit_map.values()) == set(circuit.all_qubits()), set(circuit.all_qubits()).difference(set(qubit_map.values()))
+            # apply swaps while remapping circuit
+            graph = device_connectivity(device, limit=qubit_map.values())
+            reverse_map = {p:l for l,p in qubit_map.items()}
+            if DEBUG:
+                pre = len(list(circuit.all_operations()))
+                pre_time = time.process_time()
+                print(circuit)
+            swap_network = route_circuit(circuit=circuit, device_graph=graph, algo_name='greedy', initial_mapping=reverse_map)
+            circuit = swap_network.circuit
+            if DEBUG:
+                print(circuit)
+                print([op.gate for op in circuit.all_operations()])
+                print("route_and_map: ", len(list(circuit.all_operations())) - pre, time.process_time()-pre_time)
 
-        # phrase qubit map as function
-        #qubit_map_fun = lambda qubit: qubit_map[qubit]
-
-        # compile and map circuit according to qubit_map
-        #circuit = cirq.google.optimized_for_sycamore(circuit=circuit, new_device=device, qubit_map=qubit_map_fun)
-        pre = len(list(circuit.all_operations()))
-        pre_time = time.process_time()
-        circuit = cirq.google.optimized_for_sycamore(circuit=circuit, new_device=device)
-        print("optimize: ", len(list(circuit.all_operations())) - pre, time.process_time()-pre_time)
+            # compile and map circuit according to qubit_map AGAIN
+            if DEBUG:
+                pre = len(list(circuit.all_operations()))
+                pre_time = time.process_time()
+            circuit = cirq.google.optimized_for_sycamore(circuit=circuit, new_device=device, optimizer_type='sycamore')
+            if DEBUG:
+                print("optimize: ", len(list(circuit.all_operations())) - pre, time.process_time()-pre_time)
 
         # validate circuit
         device.validate_circuit(circuit)
@@ -233,11 +229,12 @@ def multiplex_onto_sycamore(circuits:Iterable['cirq.Circuit'],
         circuits_included.add(index)
 
     yield cumulative_circuit, circuits_included
-    return
+    #return
     
 # =========================================== For Testing ===================================================================
 
 if __name__ == '__main__': 
+    print('starting')
     # super simple testing of multiple copies of the same circuit
     def gen():
         n = 6
@@ -271,7 +268,7 @@ if __name__ == '__main__':
     for c in cs:
         print(c)
     print(cirq.google.Sycamore)
-    err_qubits = get_error_qubits(25)
+    err_qubits = get_error_qubits(sys.argv[1], sys.argv[2], 25)
     print(err_qubits)
     res = multiplex_onto_sycamore(circuits=cs, device=cirq.google.Sycamore, exclude_always=err_qubits)
     for c, cis in res:
