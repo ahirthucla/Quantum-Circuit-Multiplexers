@@ -4,7 +4,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setuptools.setup(
-    name="quantum_circuit_multiplexers",
+    name="cirq_multiplexer",
     version="0.0.1",
     description="Multiplexers for quantum circuits",
     long_description=long_description,

@@ -183,8 +183,7 @@ def multiplex_onto_sycamore(circuits:Iterable['cirq.Circuit'],
                     yield measure_gate
                     return
                 key = cirq.protocols.measurement_key(measure_gate)
-                for qubit in measure_gate.qubits:
-                    yield cirq.measure(qubit, key=key + '.' + str(qubit))
+                yield cirq.Moment([cirq.measure(qubit, key=key+'.'+str(qubit)) for qubit in measure_gate.qubits])
 
             if DEBUG:
                 pre = len(list(circuit.all_operations()))
