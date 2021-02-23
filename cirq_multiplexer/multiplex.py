@@ -5,7 +5,6 @@ import networkx as nx
 import time
 import sys
 from cirq.contrib.routing import route_circuit
-import pickle
 
 from typing import Union, Sequence, Iterable, Callable, Optional, List, Set
 from numbers import Number
