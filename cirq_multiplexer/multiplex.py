@@ -5,6 +5,7 @@ import networkx as nx
 import time
 import sys
 from cirq.contrib.routing import route_circuit
+import pickle
 
 from typing import Union, Sequence, Iterable, Callable, Optional, List, Set
 from numbers import Number
@@ -33,14 +34,15 @@ def get_error_qubits(project_id, processor_id, threshold):
     processor = engine.get_processor(processor_id=processor_id)
     latest_calibration = processor.get_current_calibration()
 
-    err_qubits = []
+    err_qubits = set()
     for metric_name in latest_calibration:
         for qubit_or_pair in latest_calibration[metric_name]:
             metric_value = latest_calibration[metric_name][qubit_or_pair]
             # find the qubits that have higher error probability(above the threshold)
             if metric_value[0] > threshold:
-                # get the first qubit of the tuple from a metric key
-                err_qubits.append(qubit_or_pair[0])
+                # get all the qubits in the tuple from a metric key
+                for q in qubit_or_pair:
+                    err_qubits.add(qubit_or_pair)
     return err_qubits
 
 def mult_qubit_opcount_cost(circuit:'cirq.Circuit'): 
@@ -277,7 +279,7 @@ if __name__ == '__main__':
         print('num_q:',len(c.all_qubits()))
         print('num_op:',len(list(c.all_operations())))
         print('Simulate the circuit:')
-        results=s.simulate(c)
+        results=s.run(c, repetitions=100)
         print(results)
         print()
 
