@@ -267,7 +267,7 @@ if __name__ == '__main__':
     for c in cs:
         print(c)
     print(cirq.google.Sycamore)
-    err_qubits = get_error_qubits(sys.argv[1], sys.argv[2], 25)
+    err_qubits = get_error_qubits(sys.argv[1], sys.argv[2], 35)
     print(err_qubits)
     res = multiplex_onto_sycamore(circuits=cs, device=cirq.google.Sycamore, exclude_always=err_qubits)
     for c, cis in res:
