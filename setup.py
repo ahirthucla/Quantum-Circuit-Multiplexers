@@ -17,5 +17,5 @@ setuptools.setup(
     ],
     packages=setuptools.find_packages(),
     python_requires='>=3.6',
-    install_requires=['cirq']
+    install_requires=['cirq==0.10.0.dev20210219235859']
 )
