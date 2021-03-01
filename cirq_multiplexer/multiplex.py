@@ -41,7 +41,7 @@ def get_error_qubits(project_id, processor_id, threshold):
             if metric_value[0] > threshold:
                 # get all the qubits in the tuple from a metric key
                 for q in qubit_or_pair:
-                    err_qubits.add(qubit_or_pair)
+                    err_qubits.add(q)
     return err_qubits
 
 def mult_qubit_opcount_cost(circuit:'cirq.Circuit'): 
