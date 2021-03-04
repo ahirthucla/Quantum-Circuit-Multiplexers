@@ -106,7 +106,7 @@ def naive_line_mapping(circuit: 'cirq.Circuit',
 
     qubit_map = dict(zip(sorted(circuit.all_qubits()), line))
     qubit_map = dict(zip(circuit.all_qubits(), line))
-    return qubit_map, curve[line[-1]]
+    return qubit_map, curve.get(line[-1])
 
 
 def multiplex_onto_sycamore(circuits:Iterable['cirq.Circuit'],
