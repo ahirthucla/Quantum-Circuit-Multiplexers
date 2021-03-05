@@ -11,10 +11,6 @@ from numbers import Number
 
 DEBUG = False
 
-import pickle
-import random
-
-
 def get_curve() -> dict:
     """Looks for a hilbert curve sequence starting at a given qubit.
     Returns:
@@ -25,8 +21,8 @@ def get_curve() -> dict:
         (3,4) -> (3,5) -> (4,5) -> (4,4) -> (5,4) -> (5,5) -> 
         (6,5) -> (6,4) -> (7,4) -> (7,5) -> (7,6) -> (6,6) -> 
         (6,7) -> (5,7) -> (5,6) -> (4,6) -> (4,7) -> (3,7) -> 
-        (2,6) -> (2,7) -> (2,8) -> (3,8) -> (3,9) -> (4,9) -> 
-        (4,8) -> (5,8)
+        (3,6) -> (2,6) -> (2,7) -> (2,8) -> (3,8) -> (3,9) -> 
+        (4,9) -> (4,8) -> (5,8)
     """
     # hard_coded_rule = [1,2,-1,2,2,1,-2,1,2,1,-2,-2,-1,-2,1]
     new_rule = [1,2,-1,2,1,2,-1,2,1,2,1,-2,1,-2,-1,-2,1,-2,-1,-2,1,1,2,1,2,-1,2,1,2,-1,2,1,1,-2,1,-2,-1,-2]
@@ -45,20 +41,23 @@ def get_error_qubits(project_id, processor_id, threshold):
     processor = engine.get_processor(processor_id=processor_id)
     latest_calibration = processor.get_current_calibration()
 
-    err_qubits = []
-    connectivity = []
+    err_qubits = set()
+    connectivity = set()
     for metric_name in latest_calibration:
         for qubit_or_pair in latest_calibration[metric_name]:
             metric_value = latest_calibration[metric_name][qubit_or_pair]
             # find the qubits that have higher error probability(above the threshold)
             name = metric_name.split('_')
             if name[0] == "two":
-                connectivity.append(qubit_or_pair)
+                new_pair = (cirq.GridQubit(qubit_or_pair[0].row,qubit_or_pair[0].col),
+                    cirq.GridQubit(qubit_or_pair[1].row,qubit_or_pair[1].col))
+                connectivity.add(new_pair)
             if metric_value[0] > threshold:
                 # get all the qubits in the tuple from a metric key
                 for q in qubit_or_pair:
-                    if q not in err_qubits:
-                        err_qubits.append(cirq.GridQubit(q.row, q.col))
+                    err_qubits.add(cirq.GridQubit(q.row, q.col))
+                    # if q not in err_qubits:
+                    #     err_qubits.append(cirq.GridQubit(q.row, q.col))
     return connectivity, err_qubits
 
 def mult_qubit_opcount_cost(circuit:'cirq.Circuit'): 
@@ -97,7 +96,7 @@ def device_connectivity(device:'cirq.Device', limit: Set['cirq.Qid']) -> nx.Grap
 
 def naive_line_mapping(circuit: 'cirq.Circuit', 
                         device: 'cirq.google.XmonDevice', 
-                        connectivity: List[Tuple[cirq.GridQubit,...]] = [],
+                        connectivity: Set[Tuple[cirq.GridQubit,...]] = [],
                         exclude = None,
                         context = None):
     """ Wraps cirq.google.line_on_device to support excluding a set of qubits from the search. 
@@ -105,7 +104,7 @@ def naive_line_mapping(circuit: 'cirq.Circuit',
     """
 
     if exclude is None:
-        exclude = []
+        exclude = set()
 
     if context == None:
         context = cirq.GridQubit(7,2)
@@ -119,7 +118,6 @@ def naive_line_mapping(circuit: 'cirq.Circuit',
     try:
         line = cirq.google.line_on_device(device, length=width, 
             method=method)
-        print(line)
     except cirq.google.line.placement.sequence.NotFoundError as e:
         raise NotFoundError('No line placment found.')
 
@@ -130,9 +128,9 @@ def naive_line_mapping(circuit: 'cirq.Circuit',
 
 def multiplex_onto_sycamore(circuits:Iterable['cirq.Circuit'],
         device: 'cirq.google.XmonDevice',
-        connectivity:List[Tuple[cirq.GridQubit,...]],
+        connectivity:Set[Tuple[cirq.GridQubit,...]],
         mapping_function: Callable = naive_line_mapping,
-        exclude_always: List['cirq.google.GridQubit'] = None):
+        exclude_always: Set['cirq.google.GridQubit'] = None):
     """ Combines circuits by placing them on different qubits, according to those available to a specific device
     Args: 
         circuits: ordered iterable of circuits to multiplex. circuits are placed first-come,first-servr
@@ -268,75 +266,6 @@ if __name__ == '__main__':
         #circuit.append(cirq.measure(*cirq.LineQubit.range(n)))
         return circuit
 
-    # def gen2():
-    #     n = 5
-    #     depth = 2
-    #     circuit = cirq.Circuit(
-    #         cirq.X(cirq.LineQubit(i))
-    #         for i in range(n)
-    #     )
-    #     unitary_matrix = np.array([[1,0,0,0],
-    #                             [0,1,0,0],
-    #                             [0,0,0,1],
-    #                             [0,0,1,0]])
-    #     unitary_gate = cirq.MatrixGate(unitary_matrix)
-    #     syn_op = cirq.two_qubit_matrix_to_operations(
-    #         cirq.LineQubit(0),
-    #         cirq.LineQubit(2),
-    #         unitary_matrix,
-    #         allow_partial_czs=False,
-    #         )
-    #     # circuit.append(cirq.X(cirq.LineQubit(i)) for i in range(n))
-    #     # circuit.append(cirq.H(cirq.LineQubit(i)) for i in range(n))
-    #     circuit.append(syn_op)
-    #     circuit.append(cirq.measure(*cirq.LineQubit.range(n), key='all'))
-    #     return circuit
-
-    def make_bernstein_vazirani_circuit(input_qubits, output_qubit, oracle):
-        """Solves for factors in f(a) = a·factors + bias (mod 2) with one query."""
-
-        c = cirq.Circuit()
-
-        # Initialize qubits.
-        c.append(
-            [
-                cirq.X(output_qubit),
-                cirq.H(output_qubit),
-                cirq.H.on_each(*input_qubits),
-            ]
-        )
-
-        # Query oracle.
-        c.append(oracle)
-
-        # Measure in X basis.
-        c.append([cirq.H.on_each(*input_qubits), cirq.measure(*input_qubits, key='result')])
-
-        return c
-
-    def bernstein_var():
-        def make_oracle(input_qubits, output_qubit, secret_factor_bits, secret_bias_bit):
-            if secret_bias_bit:
-                yield cirq.X(output_qubit)
-            for qubit, bit in zip(input_qubits, secret_factor_bits):
-                if bit:
-                    yield cirq.CNOT(qubit, output_qubit)
-        input_qubits = [cirq.LineQubit(i) for i in range(16)]
-        output_qubit = cirq.LineQubit(5)
-
-        secret_bias_bit = random.randint(0, 1)
-        secret_factor_bits = [random.randint(0, 1) for _ in range(16)]
-        oracle = make_oracle(input_qubits, output_qubit, secret_factor_bits, secret_bias_bit)
-        print(
-            'Secret function:\nf(a) = a·<{}> + {} (mod 2)'.format(
-                ', '.join(str(e) for e in secret_factor_bits), secret_bias_bit
-            )
-        )
-
-        circuit = make_bernstein_vazirani_circuit(input_qubits, output_qubit, oracle)
-
-        return circuit
-
     def map_results(results):
         '''
         a helper function to group the results by circuits and then by qubits
@@ -354,15 +283,15 @@ if __name__ == '__main__':
     # Initialize Simulator
     s = cirq.Simulator()
 
-    cs = sorted([bernstein_var()], key=mult_qubit_opcount_cost)
+    cs = sorted([gen()], key=mult_qubit_opcount_cost)
     for c in cs:
         print(c)
-        results=s.run(c, repetitions=100)
+        results=s.run(c, repetitions=10)
         print('Before Mux:')
         print(results.measurements)
+        
     print(cirq.google.Sycamore)
-    connectivity, err_qubits = get_error_qubits(sys.argv[1], sys.argv[2], 25)
-    # print("error qubits:", err_qubits)
+    connectivity, err_qubits = get_error_qubits(sys.argv[1], sys.argv[2], 30)
     res = multiplex_onto_sycamore(circuits=cs, device=cirq.google.Sycamore, connectivity=connectivity, exclude_always=err_qubits)
     for c, cis in res:
         print('test')
@@ -371,12 +300,7 @@ if __name__ == '__main__':
         print('num_q:',len(c.all_qubits()))
         print('num_op:',len(list(c.all_operations())))
         print('Simulate the circuit:')
-        results=s.run(c, repetitions=100)
+        results=s.run(c, repetitions=10)
         print(results)
         print()
 
-        # print('qsim results:')
-        # qsim_simulator = qsimcirq.QSimSimulator()
-        # qsim_results = qsim_simulator.run(circuit, repetitions=5)
-        # print(qsim_results)
-        # print()

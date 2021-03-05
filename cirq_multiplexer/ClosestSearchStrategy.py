@@ -35,7 +35,7 @@ class ClosestSequenceSearch:
         self._start = start
         self._sequence = None  # type: Optional[List[cirq.GridQubit]]
 
-    def get_or_search(self, curve: dict, err_qubits:List[cirq.GridQubit], connectivity:List[Tuple[cirq.GridQubit,...]]) -> List[cirq.GridQubit]:
+    def get_or_search(self, curve: dict, err_qubits:Set[cirq.GridQubit], connectivity:Set[Tuple[cirq.GridQubit,...]]) -> List[cirq.GridQubit]:
         """Starts the search or gives previously calculated sequence.
         Returns:
             The linear qubit sequence found.
@@ -45,7 +45,7 @@ class ClosestSequenceSearch:
         return self._sequence
 
     @abc.abstractmethod
-    def _choose_next_qubit(self, qubit: cirq.GridQubit, curve: dict, err_qubits:List[cirq.GridQubit]) -> Optional[cirq.GridQubit]:
+    def _choose_next_qubit(self, qubit: cirq.GridQubit, curve: dict, err_qubits:Set[cirq.GridQubit]) -> Optional[cirq.GridQubit]:
         """Selects next qubit on the linear sequence.
         Args:
             qubit: Last qubit which is already present on the linear sequence
@@ -58,7 +58,7 @@ class ClosestSequenceSearch:
             more qubits are available and search should stop.
         """
 
-    def _find_sequence(self, curve: dict, err_qubits:List[cirq.GridQubit], connectivity:List[Tuple[cirq.GridQubit,...]]) -> List[cirq.GridQubit]:
+    def _find_sequence(self, curve: dict, err_qubits:Set[cirq.GridQubit], connectivity:Set[Tuple[cirq.GridQubit,...]]) -> List[cirq.GridQubit]:
         """Looks for a sequence starting at a given qubit.
         Returns:
             The sequence found by this method.
@@ -66,7 +66,7 @@ class ClosestSequenceSearch:
 
         return self._sequence_search(self._start, curve, err_qubits, connectivity)
 
-    def _sequence_search(self, start: cirq.GridQubit, curve: dict, err_qubits:List[cirq.GridQubit], connectivity:List[Tuple[cirq.GridQubit,...]]) -> List[cirq.GridQubit]:
+    def _sequence_search(self, start: cirq.GridQubit, curve: dict, err_qubits:Set[cirq.GridQubit], connectivity:Set[Tuple[cirq.GridQubit,...]]) -> List[cirq.GridQubit]:
         """Search for the continuous linear sequence from the given qubit.
         Args:
             start: The first qubit, where search should be triggered from.
@@ -79,18 +79,17 @@ class ClosestSequenceSearch:
         n = start  # type: Optional[cirq.GridQubit]
         curr_neighbors = []
         while n is not None:
-            # print('curr_qubit:', n)
-            # print('curr_seq:', seq)
-            # print('err_qubits:', err_qubits)
+            # find next available qubit if this one is considered bad
             if n in err_qubits:
-                # print('found error qubit:', n)
                 n = self._choose_next_qubit(n, curve, err_qubits)
                 continue
-            # Append first qubit n to the sequence
+
+            # n is not an err_qubit
+            # Append first available qubit n to the sequence
             if not seq:
                 seq.append(n)
             else:
-            # Append qubit n to the sequence if connectivity still holds
+            # Append next available qubit n to the sequence if connectivity holds
                 curr_neighbors = [self._neighbors(q, connectivity) for q in seq]
                 curr_neighbors = sum(curr_neighbors, [])
                 if n in curr_neighbors:
@@ -99,7 +98,7 @@ class ClosestSequenceSearch:
             n = self._choose_next_qubit(n, curve, err_qubits)
         return seq
 
-    def _neighbors(self, qubit:cirq.GridQubit, connectivity:List[Tuple[cirq.GridQubit,...]]):
+    def _neighbors(self, qubit:cirq.GridQubit, connectivity:Set[Tuple[cirq.GridQubit,...]]):
         possibles = [
            cirq.GridQubit(qubit.row+1, qubit.col),
            cirq.GridQubit(qubit.row, qubit.col+1),
@@ -109,22 +108,22 @@ class ClosestSequenceSearch:
 
         return [q for q in possibles if (q in self._c and self._check_connectivity(qubit, q, connectivity))]
 
-    def _check_connectivity(self, qubit1:cirq.GridQubit, qubit2:cirq.GridQubit, connectivity:List[Tuple[cirq.GridQubit,...]]):
-        return True if (qubit1, qubit2) or (qubit2,qubit1) in connectivity else False
+    def _check_connectivity(self, qubit1:cirq.GridQubit, qubit2:cirq.GridQubit, connectivity:Set[Tuple[cirq.GridQubit,...]]):
+        return True if (qubit1, qubit2) in connectivity or (qubit2,qubit1) in connectivity else False
 
 
 
 class _PickClosestNeighbors(ClosestSequenceSearch):
     """Pick Next Qubit along the hilbert curve"""
 
-    def _choose_next_qubit(self, qubit: cirq.GridQubit, curve: dict, err_qubits:List[cirq.GridQubit]) -> Optional[cirq.GridQubit]:
+    def _choose_next_qubit(self, qubit: cirq.GridQubit, curve: dict, err_qubits:Set[cirq.GridQubit]) -> Optional[cirq.GridQubit]:
         return curve.get(qubit)
 
 
 class ClosestSequenceSearchStrategy(place_strategy.LinePlacementStrategy):
     """closest search method for linear sequence of qubits on a chip."""
 
-    def __init__(self, start: cirq.GridQubit, curve: dict, err_qubits:List[cirq.GridQubit], connectivity:List[Tuple[cirq.GridQubit,...]]) -> None:
+    def __init__(self, start: cirq.GridQubit, curve: dict, err_qubits:Set[cirq.GridQubit], connectivity:Set[Tuple[cirq.GridQubit,...]]) -> None:
         """Initializes closest sequence search strategy.
         Args:
             start: cirq.GridQubit to start
@@ -151,11 +150,14 @@ class ClosestSequenceSearchStrategy(place_strategy.LinePlacementStrategy):
         if self.start is None:
             raise NotFoundError("No qubit to start")
 
-        sequence = []  # type: LineSequence
+        sequences = []  # type: LineSequence
 
-        sequence.append(_PickClosestNeighbors(device, self.start).get_or_search(self.curve, self.err_qubits, self.connectivity))
+        res = []
 
-        # return GridQubitLineTuple.best_of(sequence[:length]), sequence[length] if length < len(sequence) else None
-        return GridQubitLineTuple.best_of(sequence[:length], length)
+        while(len(res) < length and self.start is not None):
+            res = _PickClosestNeighbors(device, self.start).get_or_search(self.curve, self.err_qubits, self.connectivity)
+            self.start = self.curve.get(res[-1])
+            sequences.append(res)
 
-        # return GridQubitLineTuple.best_of(sequences, length), start, step
+        return GridQubitLineTuple.best_of(sequences, length)
+
