@@ -56,8 +56,6 @@ def get_error_qubits(project_id, processor_id, threshold):
                 # get all the qubits in the tuple from a metric key
                 for q in qubit_or_pair:
                     err_qubits.add(cirq.GridQubit(q.row, q.col))
-                    # if q not in err_qubits:
-                    #     err_qubits.append(cirq.GridQubit(q.row, q.col))
     return connectivity, err_qubits
 
 def mult_qubit_opcount_cost(circuit:'cirq.Circuit'): 
